@@ -3,6 +3,7 @@
 optparse = require 'optparse'
 irc = require 'irc'
 growler = require 'growler'
+net = require 'net'
 
 class GrowlNotifier
   constructor:()->
@@ -31,6 +32,7 @@ class GrowlNotifier
 
 switches = [
   ['-h', '--help', 'Shows help sections']
+  ['-m', '--mode MODE', 'set mode "Client" or "Proxy" (defualt is "Client")']
   ['-s', '--server SERVER', 'server address']
   ['-p', '--port PORT', 'server port']
   ['-n', '--nick NICKNAME', 'nick']
@@ -42,6 +44,7 @@ options =
   port: 6667
   pass: undefined
   nick: undefined
+  mode: "Client"
 
 error = (reason)->
   console.log parser.toString()
@@ -53,6 +56,10 @@ get_parser = ()->
   parser = new optparse.OptionParser switches
   parser.on 'help', ()->
     console.log parser.toString()
+
+  parser.on 'mode', (name, value)->
+    error "mode required" if !value
+    options.mode = value
 
   parser.on 'server', (name, value)->
     error "address required" if !value
@@ -77,16 +84,44 @@ parser.parse process.argv
 error "nick required" if !options.nick
 error "server required" if !options.server
 
-g = new GrowlNotifier()
-g.start()
+class IRC2Growl
+  constructor:()->
+    @g = new GrowlNotifier()
+    @g.start()
 
-client = new irc.Client options.server, options.nick ,{
-    password: options.pass
-    port: options.port
-  }
+class IRC2GrowlClient extends IRC2Growl
+  setup:(options)->
+    @client = new irc.Client options.server, options.nick ,{
+      password: options.pass
+      port: options.port
+    }
 
-client.on 'message', (nick, channel, message)->
-  g.notify "#{nick}@#{channel}", message
+    @client.on 'message', (nick, channel, message)=>
+      @g.notify "#{nick}@#{channel}", message
 
-client.on 'notice', (nick,channel,message)->
-  g.notify "#{nick}@#{channel}", message
+    @client.on 'notice', (nick,channel,message)=>
+      @g.notify "#{nick}@#{channel}", message
+
+class IRC2GrowlProxy extends IRC2Growl
+  setup:(options)->
+    @serv = net.createServer (client)=>
+      tmp_buffer = []
+      tmp_buffer_listener = (data)->
+        tmp_buffer.push data
+      client.on 'data', tmp_buffer_listener
+
+      bridge = net.connect options.port, options.server, ()=>
+        client.pipe bridge
+        bridge.pipe client
+        client.removeListener 'data', tmp_buffer_listener
+        while tmp_buffer.length
+          bridge.write(tmp_buffer.pop())
+
+    @serv.listen 6667
+      
+mode2class =
+  Client: IRC2GrowlClient
+  Proxy: IRC2GrowlProxy
+
+irc2growl = new mode2class[options.mode]
+irc2growl.setup options
