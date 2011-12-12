@@ -2,10 +2,15 @@
 
 optparse = require 'optparse'
 irc = require 'irc'
-growl = require 'growl'
+growler = require 'growler'
 
 class GrowlNotifier
   constructor:()->
+    @growl = new growler.GrowlApplication('irc2growl');
+    @growl.setNotifications {
+      'IRC Message': {}
+    }
+    @growl.register()
     @queue = []
 
   notify:(title, body)->
@@ -18,9 +23,11 @@ class GrowlNotifier
     setInterval ()=>
       data = @queue.pop()
       return if !data
-      growl.notify data.body,
+      @growl.sendNotification('IRC Message',
         title: data.title
-      , 1000
+        text: data.body
+      )
+    , 100
 
 switches = [
   ['-h', '--help', 'Shows help sections']
@@ -48,19 +55,19 @@ get_parser = ()->
     console.log parser.toString()
 
   parser.on 'server', (name, value)->
-    error "requires address" if !value
+    error "address required" if !value
     options.server = value
 
   parser.on 'port', (name, value)->
-    error "requires address" if !value
+    error "port required" if !value
     options.port = parseInt(value)
 
   parser.on 'pass', (name, value)->
-    error "requires password" if !value
+    error "password required" if !value
     options.pass = value
 
   parser.on 'nick', (name, value)->
-    error "requires nick" if !value
+    error "nick required" if !value
     options.nick = value
   return parser
 
@@ -81,4 +88,4 @@ client.on 'message', (nick, channel, message)->
   g.notify "#{nick}@#{channel}", message
 
 client.on 'notice', (nick,channel,message)->
-  g.notify channel, "#{message}@#{nick}"
+  g.notify "#{nick}@#{channel}", message
