@@ -71,7 +71,8 @@ get_parser = ()->
     options.nick = value
   return parser
 
-get_parser().parse process.argv
+parser = get_parser()
+parser.parse process.argv
 
 error "nick required" if !options.nick
 error "server required" if !options.server
