@@ -1,0 +1,84 @@
+#!/usr/bin/env coffee
+
+optparse = require 'optparse'
+irc = require 'irc'
+growl = require 'growl'
+
+class GrowlNotifier
+  constructor:()->
+    @queue = []
+
+  notify:(title, body)->
+    @queue.push {
+      title: title
+      body: body
+    }
+
+  start:()->
+    setInterval ()=>
+      data = @queue.pop()
+      return if !data
+      growl.notify data.body,
+        title: data.title
+      , 1000
+
+switches = [
+  ['-h', '--help', 'Shows help sections']
+  ['-s', '--server SERVER', 'server address']
+  ['-p', '--port PORT', 'server port']
+  ['-n', '--nick NICKNAME', 'nick']
+  ['--pass PASSWORD', 'server password']
+]
+
+options =
+  server: undefined
+  port: 6667
+  pass: undefined
+  nick: undefined
+
+error = (reason)->
+  console.log parser.toString()
+  console.log()
+  console.log "error: #{reason}"
+  process.exit(-1)
+
+get_parser = ()->
+  parser = new optparse.OptionParser switches
+  parser.on 'help', ()->
+    console.log parser.toString()
+
+  parser.on 'server', (name, value)->
+    error "requires address" if !value
+    options.server = value
+
+  parser.on 'port', (name, value)->
+    error "requires address" if !value
+    options.port = parseInt(value)
+
+  parser.on 'pass', (name, value)->
+    error "requires password" if !value
+    options.pass = value
+
+  parser.on 'nick', (name, value)->
+    error "requires nick" if !value
+    options.nick = value
+  return parser
+
+get_parser().parse process.argv
+
+error "nick required" if !options.nick
+error "server required" if !options.server
+
+g = new GrowlNotifier()
+g.start()
+
+client = new irc.Client options.server, options.nick ,{
+    password: options.pass
+    port: options.port
+  }
+
+client.on 'message', (nick, channel, message)->
+  g.notify "#{nick}@#{channel}", message
+
+client.on 'notice', (nick,channel,message)->
+  g.notify channel, "#{message}@#{nick}"

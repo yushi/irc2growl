@@ -1,0 +1,12 @@
+{
+  "name": "irc2growl",
+  "version": "0.1.0" ,
+  "description" : "growl notifier for irc",
+  "keywords": ["irc", "growl"],
+  "dependencies":
+  {
+    "optparse":"1.0.3",
+    "irc":"0.3.3",
+    "growl":"1.2.0"
+  }
+}
