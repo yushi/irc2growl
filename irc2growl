@@ -4,17 +4,21 @@ optparse = require 'optparse'
 irc = require 'irc'
 growler = require 'growler'
 net = require 'net'
+Iconv = (require 'iconv-jp').Iconv
 
 class GrowlNotifier
-  constructor:()->
+  constructor:(@charset)->
     @growl = new growler.GrowlApplication('irc2growl');
     @growl.setNotifications {
       'IRC Message': {}
     }
     @growl.register()
     @queue = []
+    @iconv = new Iconv(@charset, 'UTF-8') if @charset != 'UTF-8'
 
   notify:(title, body)->
+    title = this.toutf8 title
+    body = this.toutf8 body
     @queue.push {
       title: title
       body: body
@@ -28,7 +32,19 @@ class GrowlNotifier
         title: data.title
         text: data.body
       )
-    , 100
+    , 10
+
+  toutf8:(str)->
+    return str if !@iconv
+
+    utf8_str = str
+    try
+      converted = (@iconv.convert str)
+      utf8_str = converted.toString()
+    catch e
+      console.log e
+
+    return utf8_str
 
 switches = [
   ['-h', '--help', 'Shows help sections']
@@ -36,6 +52,7 @@ switches = [
   ['-s', '--server SERVER', 'server address']
   ['-p', '--port PORT', 'server port']
   ['-n', '--nick NICKNAME', 'nick']
+  ['-c', '--charset CHARSET', 'charset for server(default is "UTF-8")']
   ['--pass PASSWORD', 'server password']
 ]
 
@@ -45,6 +62,7 @@ options =
   pass: undefined
   nick: undefined
   mode: "Client"
+  charset: 'UTF-8'
 
 error = (reason)->
   console.log parser.toString()
@@ -76,6 +94,11 @@ get_parser = ()->
   parser.on 'nick', (name, value)->
     error "nick required" if !value
     options.nick = value
+
+  parser.on 'charset', (name, value)->
+    error "charset required" if !value
+    options.charset = value
+  
   return parser
 
 parser = get_parser()
@@ -85,8 +108,8 @@ error "nick required" if !options.nick
 error "server required" if !options.server
 
 class IRC2Growl
-  constructor:()->
-    @g = new GrowlNotifier()
+  constructor:(@charset)->
+    @g = new GrowlNotifier(@charset)
     @g.start()
 
 class IRC2GrowlClient extends IRC2Growl
@@ -123,5 +146,5 @@ mode2class =
   Client: IRC2GrowlClient
   Proxy: IRC2GrowlProxy
 
-irc2growl = new mode2class[options.mode]
+irc2growl = new mode2class[options.mode](options.charset)
 irc2growl.setup options
