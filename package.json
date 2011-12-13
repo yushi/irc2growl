@@ -7,6 +7,7 @@
   {
     "optparse":"1.0.3",
     "irc":"0.3.3",
-    "growler":"0.0.1"
+    "growler":"0.0.1",
+    "iconv-jp":"1.1.3"
   }
 }
