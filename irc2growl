@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 var net = require('net')
 var util = require('util')
 var optparse = require('optparse')
