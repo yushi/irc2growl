@@ -3,6 +3,7 @@ var util = require('util')
 var optparse = require('optparse')
 var events = require('events')
 var growler = require('growler')
+var Iconv = require('iconv-jp').Iconv
 
 var _DEBUG = false;
 var DEBUG = function(str){
@@ -17,12 +18,14 @@ var switches = [ ['-h', '--help', 'Shows help sections']
                , ['-d', '--debug', 'enable debug message']
                , ['-r', '--remote ADDR:PORT', 'set remote address and port for connect ']
                , ['-l', '--listen ADDR[:PORT]', 'set local address and port for listen'] 
+               , ['-c', '--charset CHARSET', 'set charset for irc server']
 ]
 
 var options = { remoteAddr: undefined
               , remotePort: undefined
               , localAddr: "0.0.0.0"
               , localPort: undefined
+              , charset: 'UTF-8'
               }
 
 function ConnectionPair(connA, connB){
@@ -87,41 +90,39 @@ function IRCProtocolParser(){
 }
 util.inherits(IRCProtocolParser, events.EventEmitter)
 
-function IRCLineParseAndNotify(line){
-  console.log(line)
-  var idx
-  if((idx = line.indexOf(' ')) == -1){ return }
-  var nick = line.substr(0, idx)
-  line = line.substr(idx + 1)
-
-  if(nick[0] == ':'){nick = nick.substr(1)}
-  nick = nick.split('!')[0]
-  
-  if((idx = line.indexOf(' ')) == -1){ return }
-  var type = line.substr(0, idx)
-  line = line.substr(idx + 1)
-
-  if((idx = line.indexOf(' ')) == -1){ return }
-  var channel = line.substr(0, idx)
-  line = line.substr(idx + 1)
-
-  if(type == 'NOTICE'||
-     type == 'PRIVMSG'
-    ){
-    var g = new growler.GrowlApplication('irc2growl')
-    g.setNotifications({'IRC Message': {}})
-    g.register()
-
-    g.sendNotification('IRC Message'
-                      ,{ 'title': nick + '@' + channel
-                       , 'text': line.substr(1)
-                       })
+function IRCLineParseAndNotify(growl){
+  return function IRCLineParseAndNotify(line){
+    var idx
+    if((idx = line.indexOf(' ')) == -1){ return }
+    var nick = line.substr(0, idx)
+    line = line.substr(idx + 1)
+    
+    if(nick[0] == ':'){nick = nick.substr(1)}
+    nick = nick.split('!')[0]
+    
+    if((idx = line.indexOf(' ')) == -1){ return }
+    var type = line.substr(0, idx)
+    line = line.substr(idx + 1)
+    
+    if((idx = line.indexOf(' ')) == -1){ return }
+    var channel = line.substr(0, idx)
+    line = line.substr(idx + 1)
+    
+    if(type == 'NOTICE'||
+       type == 'PRIVMSG'
+      ){
+      growl.notify(nick + '@' + channel, line.substr(1))
+    }
   }
 }
 var parser = new optparse.OptionParser(switches)
 
 parser.on('help', function(name, value){
                     console.log(parser.toString())
+                  })
+
+parser.on('charset', function(name, value){
+                       options.charset = value
                   })
 
 parser.on('debug', function(name, value){
@@ -161,8 +162,37 @@ var bridge = new TCPBridge( options.localAddr
 var ircRecvParser = new IRCProtocolParser()
 var ircSendParser = new IRCProtocolParser()
 
-ircRecvParser.on('line', IRCLineParseAndNotify)
-ircSendParser.on('line', IRCLineParseAndNotify)
+function Growl(charset){
+  this.growl = new growler.GrowlApplication('irc2growl')
+  this.growl.setNotifications({'IRC Message': {}})
+  this.growl.register()
+  if(charset != 'UTF-8'){
+    this.iconv = new Iconv(charset, 'UTF-8')
+  }
+  
+  this.notify = 
+    function(title, text){
+      if(this.iconv){
+        try{
+          var converted = this.iconv.convert(title)
+          title = converted.toString()
+        }catch(e){ console.log(e) }
+
+        try{ 
+          var converted = this.iconv.convert(text)
+          text = converted.toString()
+        }catch(e){ console.log(e) }
+      }
+      this.growl.sendNotification('IRC Message'
+                                 ,{ 'title': title
+                                  , 'text': text
+                                  })
+    }
+}
+
+var g = new Growl(options.charset)
+ircRecvParser.on('line', IRCLineParseAndNotify(g))
+ircSendParser.on('line', IRCLineParseAndNotify(g))
 
 bridge.on('data_local', function(data){
                           ircSendParser.emit('data', data)
