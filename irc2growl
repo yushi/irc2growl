@@ -1,150 +1,203 @@
-#!/usr/bin/env coffee
+var net = require('net')
+var util = require('util')
+var optparse = require('optparse')
+var events = require('events')
+var growler = require('growler')
+var Iconv = require('iconv-jp').Iconv
 
-optparse = require 'optparse'
-irc = require 'irc'
-growler = require 'growler'
-net = require 'net'
-Iconv = (require 'iconv-jp').Iconv
+var _DEBUG = false;
+var DEBUG = function(str){
+              if(!_DEBUG){ return }
+              if(typeof(str)== 'object'){
+                str = util.inspect(str)
+              }
+              console.log('DEBUG: '  +  str)
+}
 
-class GrowlNotifier
-  constructor:(@charset)->
-    @growl = new growler.GrowlApplication('irc2growl');
-    @growl.setNotifications {
-      'IRC Message': {}
-    }
-    @growl.register()
-    @queue = []
-    @iconv = new Iconv(@charset, 'UTF-8') if @charset != 'UTF-8'
-
-  notify:(title, body)->
-    title = this.toutf8 title
-    body = this.toutf8 body
-    @queue.push {
-      title: title
-      body: body
-    }
-
-  start:()->
-    setInterval ()=>
-      data = @queue.pop()
-      return if !data
-      @growl.sendNotification('IRC Message',
-        title: data.title
-        text: data.body
-      )
-    , 10
-
-  toutf8:(str)->
-    return str if !@iconv
-
-    utf8_str = str
-    try
-      converted = (@iconv.convert str)
-      utf8_str = converted.toString()
-    catch e
-      console.log e
-
-    return utf8_str
-
-switches = [
-  ['-h', '--help', 'Shows help sections']
-  ['-m', '--mode MODE', 'set mode "Client" or "Proxy" (defualt is "Client")']
-  ['-s', '--server SERVER', 'server address']
-  ['-p', '--port PORT', 'server port']
-  ['-n', '--nick NICKNAME', 'nick']
-  ['-c', '--charset CHARSET', 'charset for server(default is "UTF-8")']
-  ['--pass PASSWORD', 'server password']
+var switches = [ ['-h', '--help', 'Shows help sections']
+               , ['-d', '--debug', 'enable debug message']
+               , ['-r', '--remote ADDR:PORT', 'set remote address and port for connect ']
+               , ['-l', '--listen ADDR[:PORT]', 'set local address and port for listen'] 
+               , ['-c', '--charset CHARSET', 'set charset for irc server']
 ]
 
-options =
-  server: undefined
-  port: 6667
-  pass: undefined
-  nick: undefined
-  mode: "Client"
-  charset: 'UTF-8'
+var options = { remoteAddr: undefined
+              , remotePort: undefined
+              , localAddr: "0.0.0.0"
+              , localPort: undefined
+              , charset: 'UTF-8'
+              }
 
-error = (reason)->
-  console.log parser.toString()
-  console.log()
-  console.log "error: #{reason}"
-  process.exit(-1)
+function ConnectionPair(connA, connB){
+  this.onEnd = function(sock){
+                 return function(){
+                          sock.destroy()
+                        }
+               }
 
-get_parser = ()->
-  parser = new optparse.OptionParser switches
-  parser.on 'help', ()->
-    console.log parser.toString()
+  this.onClose = function(){ DEBUG('close') }
 
-  parser.on 'mode', (name, value)->
-    error "mode required" if !value
-    options.mode = value
+  connA.on('end', this.onEnd(connA))
+  connB.on('end', this.onEnd(connB))
 
-  parser.on 'server', (name, value)->
-    error "address required" if !value
-    options.server = value
+  connA.on('close', this.onClose)
+  connB.on('close', this.onClose)
 
-  parser.on 'port', (name, value)->
-    error "port required" if !value
-    options.port = parseInt(value)
+  connA.pipe(connB)
+  connB.pipe(connA)
+}
 
-  parser.on 'pass', (name, value)->
-    error "password required" if !value
-    options.pass = value
-
-  parser.on 'nick', (name, value)->
-    error "nick required" if !value
-    options.nick = value
-
-  parser.on 'charset', (name, value)->
-    error "charset required" if !value
-    options.charset = value
+function TCPBridge(localAddr, localPort, remoteAddr, remotePort){
+  var _this = this
+  events.EventEmitter.call(this)
+  this.localAddr = localAddr
+  this.localPort = localPort
+  this.remoteAddr = remoteAddr
+  this.remotePort = remotePort
   
-  return parser
+  this.connectionHandler = 
+    function(c){
+      DEBUG('new connection created')
+      var remote = new net.Socket()
+      remote.connect(remotePort, remoteAddr)
+      var pair = new ConnectionPair(c, remote)
 
-parser = get_parser()
-parser.parse process.argv
-
-error "nick required" if !options.nick
-error "server required" if !options.server
-
-class IRC2Growl
-  constructor:(@charset)->
-    @g = new GrowlNotifier(@charset)
-    @g.start()
-
-class IRC2GrowlClient extends IRC2Growl
-  setup:(options)->
-    @client = new irc.Client options.server, options.nick ,{
-      password: options.pass
-      port: options.port
+      c.on('data', function(data){
+                     _this.emit('data_local', data)
+                   })
+      remote.on('data', function(data){
+                          _this.emit('data_remote', data)
+                        })
     }
+  this.localServer = net.createServer(this.connectionHandler)
+  this.localServer.listen(this.localPort, this.localAddr)
 
-    @client.on 'message', (nick, channel, message)=>
-      @g.notify "#{nick}@#{channel}", message
+}
+util.inherits(TCPBridge, events.EventEmitter)
 
-    @client.on 'notice', (nick,channel,message)=>
-      @g.notify "#{nick}@#{channel}", message
+function IRCProtocolParser(){
+  events.EventEmitter.call(this)
+  var _this = this
+  this.buffer = ""
+  this.on('data', function(data){
+                    _this.buffer += data.toString()
+                    var idx
+                    while((idx = _this.buffer.indexOf("\r\n")) != -1){
+                      _this.emit('line', _this.buffer.substr(0,idx))
+                      _this.buffer = _this.buffer.substr(idx + 2)
+                    }
+                  })
+}
+util.inherits(IRCProtocolParser, events.EventEmitter)
 
-class IRC2GrowlProxy extends IRC2Growl
-  setup:(options)->
-    @serv = net.createServer (client)=>
-      tmp_buffer = []
-      tmp_buffer_listener = (data)->
-        tmp_buffer.push data
-      client.on 'data', tmp_buffer_listener
+function IRCLineParseAndNotify(growl){
+  return function IRCLineParseAndNotify(line){
+    var idx
+    if((idx = line.indexOf(' ')) == -1){ return }
+    var nick = line.substr(0, idx)
+    line = line.substr(idx + 1)
+    
+    if(nick[0] == ':'){nick = nick.substr(1)}
+    nick = nick.split('!')[0]
+    
+    if((idx = line.indexOf(' ')) == -1){ return }
+    var type = line.substr(0, idx)
+    line = line.substr(idx + 1)
+    
+    if((idx = line.indexOf(' ')) == -1){ return }
+    var channel = line.substr(0, idx)
+    line = line.substr(idx + 1)
+    
+    if(type == 'NOTICE'||
+       type == 'PRIVMSG'
+      ){
+      growl.notify(nick + '@' + channel, line.substr(1))
+    }
+  }
+}
+var parser = new optparse.OptionParser(switches)
 
-      bridge = net.connect options.port, options.server, ()=>
-        client.pipe bridge
-        bridge.pipe client
-        client.removeListener 'data', tmp_buffer_listener
-        while tmp_buffer.length
-          bridge.write(tmp_buffer.pop())
+parser.on('help', function(name, value){
+                    console.log(parser.toString())
+                  })
 
-    @serv.listen 6667
-      
-mode2class =
-  Client: IRC2GrowlClient
-  Proxy: IRC2GrowlProxy
+parser.on('charset', function(name, value){
+                       options.charset = value
+                  })
 
-irc2growl = new mode2class[options.mode](options.charset)
-irc2growl.setup options
+parser.on('debug', function(name, value){
+                     _DEBUG = true
+                  })
+
+parser.on('remote', function(name, value){
+                      if(value.indexOf(':') == -1 ){
+                        console.log('format error: ":" required')
+                        process.exit(-1)
+                      }
+                      var ref = value.split(':')
+                      options.remoteAddr = ref[0]
+                      options.remotePort = ref[1]
+                      if(!options.localPort){
+                        options.localPort = options.remotePort
+                      }
+                    })
+
+parser.on('listen', function(name, value){
+                      if(value.indexOf(':') == -1){
+                        options.localPort = value
+                      }else{
+                        var ref = value.split(':')
+                        options.localAddr = ref[0]
+                        options.localPort = ref[1]
+                      }
+                    })
+
+parser.parse(process.argv)
+DEBUG(options)
+var bridge = new TCPBridge( options.localAddr
+                          , options.localPort
+                          , options.remoteAddr
+                          , options.remotePort)
+
+var ircRecvParser = new IRCProtocolParser()
+var ircSendParser = new IRCProtocolParser()
+
+function Growl(charset){
+  this.growl = new growler.GrowlApplication('irc2growl')
+  this.growl.setNotifications({'IRC Message': {}})
+  this.growl.register()
+  if(charset != 'UTF-8'){
+    this.iconv = new Iconv(charset, 'UTF-8')
+  }
+  
+  this.notify = 
+    function(title, text){
+      if(this.iconv){
+        try{
+          var converted = this.iconv.convert(title)
+          title = converted.toString()
+        }catch(e){ console.log(e) }
+
+        try{ 
+          var converted = this.iconv.convert(text)
+          text = converted.toString()
+        }catch(e){ console.log(e) }
+      }
+      this.growl.sendNotification('IRC Message'
+                                 ,{ 'title': title
+                                  , 'text': text
+                                  })
+    }
+}
+
+var g = new Growl(options.charset)
+ircRecvParser.on('line', IRCLineParseAndNotify(g))
+ircSendParser.on('line', IRCLineParseAndNotify(g))
+
+bridge.on('data_local', function(data){
+                          ircSendParser.emit('data', data)
+                        })
+
+bridge.on('data_remote', function(data){
+                           ircRecvParser.emit('data', data)
+                         })
