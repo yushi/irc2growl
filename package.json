@@ -5,8 +5,8 @@
   "keywords": ["irc", "growl"],
   "dependencies":
   {
-    "optparse":"1.0.3",
+    "optimist":"0.3.4",
     "growler":"0.0.1",
-    "iconv-jp":"1.1.3"
+    "iconv":"1.2.3"
   }
 }
