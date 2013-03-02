@@ -45,11 +45,13 @@ function parseOptions(){
   options.remotePort = remoteHostPort[1]
 
 
-  var listenHostPort = parseHostPort(argv.listen)
-  if(listenHostPort[0] != ''){
+  if(typeof(argv.listen) == 'number'){
+    options.localPort = argv.listen
+  }else{
+    var listenHostPort = parseHostPort(argv.listen)
     options.localAddr = listenHostPort[0]
+    options.localPort = listenHostPort[1]
   }
-  options.localPort = listenHostPort[1]
 
   return options
 }
